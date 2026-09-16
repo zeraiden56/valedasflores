@@ -1,0 +1,9 @@
+.godot/
+.vs/
+.vscode/
+bin/
+obj/
+build/
+*.user
+
+.tools/
