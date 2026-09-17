@@ -7,7 +7,20 @@ public partial class Farm : Node3D
 {
     public Player Player = null!;
     public Tractor Tractor = null!;
+    public Hilux Hilux = null!;
+    public Jeep Jeep = null!;
+    public bool DrivingJeep => Player.Driving && Jeep.Occupied;
+    public bool DrivingHilux => Player.Driving && Hilux.Occupied;
+    public bool DrivingTractor => Player.Driving && Tractor.Occupied;
+    public CharacterBody3D ActiveVehicle => DrivingJeep ? Jeep : DrivingHilux ? Hilux : Tractor;
+    public float VehicleSpeed => DrivingJeep ? Jeep.Speed : DrivingHilux ? Hilux.Speed : Tractor.Speed;
+    public string VehicleName => DrivingJeep ? "WILLYS CJ5" : DrivingHilux ? "HILUX 1999" : "CBT 2105";
     public Camera3D Camera = null!;
+    public Node3D World = null!;
+    public FarmTerrain Terrain = null!;
+    public FarmActivities Activities = null!;
+    public WorldBuilder Builder = null!;
+    private Label _progress = null!;
     private Label _status = null!, _hint = null!, _speed = null!, _toast = null!;
     private Control _pausePanel = null!;
     private bool _paused;
@@ -19,20 +32,32 @@ public partial class Farm : Node3D
     {
         ProcessMode = ProcessModeEnum.Always;
         RegisterInput();
-        var world = new Node3D { Name = "FarmWorld", ProcessMode = ProcessModeEnum.Pausable }; AddChild(world);
-        FarmWorld.Build(world);
+        RegisterGamepad();
+        World = new Node3D { Name = "FarmWorld", ProcessMode = ProcessModeEnum.Pausable }; AddChild(World);
+        FarmWorld.Build(World); Terrain = World.GetNode<FarmTerrain>("Terrain");
         Tractor = new Tractor { Position = new(-4, .15f, 2), ProcessMode = ProcessModeEnum.Pausable }; AddChild(Tractor);
-        Player = new Player { Position = new(-.8f, .05f, 5.2f), Yaw = .7f, ProcessMode = ProcessModeEnum.Pausable }; AddChild(Player);
+        Hilux = new Hilux { Position = new(34, .2f, 18), Rotation = new(0, Mathf.Pi / 2, 0), ProcessMode = ProcessModeEnum.Pausable }; AddChild(Hilux);
+        Jeep = new Jeep { Position = new(40, .2f, 20), Rotation = new(0, Mathf.Pi / 2, 0), ProcessMode = ProcessModeEnum.Pausable }; AddChild(Jeep);
+        Player = new Player { Position = new(-10, .05f, 18), Yaw = -.5f, ProcessMode = ProcessModeEnum.Pausable }; AddChild(Player);
         Camera = new Camera3D { Current = true, Fov = 78, Near = .06f, Far = 400 }; AddChild(Camera);
+        Activities = new FarmActivities { Farm = this, ProcessMode = ProcessModeEnum.Pausable }; AddChild(Activities);
+        Builder = new WorldBuilder { Farm = this }; AddChild(Builder);
         CreateHud();
+        _Process(0);
+        GetTree().AutoAcceptQuit = false;
+        GetWindow().CloseRequested += () => { SetPaused(true); Confirm("Sair? Alterações após o último save serão perdidas.", () => QuitGame()); };
         Input.MouseMode = Input.MouseModeEnum.Captured;
         if (Array.Exists(OS.GetCmdlineUserArgs(), arg => arg == "--smoke")) AddChild(new SmokeTest { Farm = this });
+        else if (Array.Exists(OS.GetCmdlineUserArgs(), arg => arg == "--gameplay-test")) AddChild(new GameplayTest { Farm = this });
+        else if (Array.Exists(OS.GetCmdlineUserArgs(), arg => arg == "--input-test")) AddChild(new InputTest { Farm = this });
+        else if (Array.Exists(OS.GetCmdlineUserArgs(), arg => arg == "--vehicle-test")) AddChild(new VehicleTest { Farm = this });
+        else ShowTitleMenu();
     }
 
     private static void RegisterInput()
     {
         (string Name, Key Code)[] keys = { ("forward", Key.W), ("back", Key.S), ("left", Key.A), ("right", Key.D),
-            ("run", Key.Shift), ("jump", Key.Space), ("interact", Key.E), ("camera", Key.V), ("lights", Key.F), ("pause", Key.Escape) };
+            ("roof", Key.H), ("accelerate", Key.W), ("reverse", Key.S), ("brake", Key.Space), ("run", Key.Shift), ("jump", Key.Space), ("interact", Key.E), ("camera", Key.V), ("lights", Key.F), ("pause", Key.Escape) };
         foreach (var key in keys)
         {
             if (!InputMap.HasAction(key.Name)) InputMap.AddAction(key.Name);
@@ -42,8 +67,30 @@ public partial class Farm : Node3D
 
     public override void _UnhandledInput(InputEvent ev)
     {
-        if (ev.IsActionPressed("pause")) { SetPaused(!_paused); return; }
+        if (ev.IsActionPressed("pause")) { if (!HasVisibleDialog() && !(_paused && BackMenu())) SetPaused(!_paused); return; }
+        if (ev.IsActionPressed("quick_save") && !HasVisibleDialog()) { QuickSave(); return; }
+        if (ev is InputEventKey saveKey && saveKey.Pressed && !saveKey.Echo && saveKey.PhysicalKeycode == Key.F5) { QuickSave(); return; }
         if (_paused) return;
+        if (ev is InputEventKey builderKey && builderKey.Pressed && !builderKey.Echo && builderKey.PhysicalKeycode == Key.F2) { Builder.Toggle(); return; }
+        if (Builder.Active) { Builder.HandleInput(ev); return; }
+        if (ev.IsActionPressed("context")) ContextAction();
+        if (ev.IsActionPressed("roof")) ChangeJeepRoof();
+        if (ev.IsActionPressed("cycle_tool")) SelectTool(Tractor.Tool == 0 ? 1 : Tractor.Tool == 1 && Activities.State.HarrowOwned ? 2 : 0);
+        if (ev.IsActionPressed("lower_tool") && DrivingTractor) Tractor.ToggleTool();
+        if (ev is InputEventKey key && key.Pressed && !key.Echo)
+        {
+            switch (key.PhysicalKeycode)
+            {
+                case Key.G: Activities.Refuel(); break;
+                case Key.B: OpenShop(); break;
+                case Key.P: Activities.FishAction(); break;
+                case Key.Key1: SelectTool(1); break;
+                case Key.Key2: SelectTool(2); break;
+                case Key.Key3: SelectTool(0); break;
+                case Key.C: Activities.CropAction(); break;
+                case Key.R: if (DrivingTractor) Tractor.ToggleTool(); break;
+            }
+        }
         if (ev is InputEventMouseMotion mouse && Input.MouseMode == Input.MouseModeEnum.Captured)
         {
             if (Player.Driving)
@@ -59,12 +106,17 @@ public partial class Farm : Node3D
         }
         if (ev is InputEventMouseButton button && button.Pressed)
         {
+            if (button.ButtonIndex == MouseButton.Left)
+            {
+                if (Activities.NearbyService().Length > 0) ContextAction();
+                else if (CanEnter()) Interact();
+            }
             if (button.ButtonIndex == MouseButton.WheelUp) _zoom = Mathf.Max(4.5f, _zoom - .6f);
             if (button.ButtonIndex == MouseButton.WheelDown) _zoom = Mathf.Min(13, _zoom + .6f);
         }
         if (ev.IsActionPressed("interact")) Interact();
         if (ev.IsActionPressed("camera")) ToggleCamera();
-        if (ev.IsActionPressed("lights") && Player.Driving) Tractor.ToggleLights();
+        if (ev.IsActionPressed("lights") && Player.Driving) { if (DrivingJeep) Jeep.ToggleLights(); else if (DrivingHilux) Hilux.ToggleLights(); else Tractor.ToggleLights(); }
     }
 
     public void ToggleCamera()
@@ -73,57 +125,30 @@ public partial class Farm : Node3D
         else Player.ThirdPerson = !Player.ThirdPerson;
         _snapCamera = true;
     }
-
-    public bool Interact()
+    public void SnapCamera() { _snapCamera = true; }
+    public bool SelectTool(int tool)
     {
-        if (!Player.Driving)
-        {
-            if (!CanEnter()) return false;
-            Tractor.Occupied = true;
-            Player.SetDriving(true);
-            _vehicleThird = true; _orbitYaw = 0; _orbitPitch = -.3f;
-            _snapCamera = true;
-            return true;
-        }
-        if (Mathf.Abs(Tractor.Speed) > .4f) { Message("Pare o trator antes de descer. Segure ESPAÇO para frear."); return false; }
-        foreach (var local in new[] { new Vector3(2.1f, .12f, .5f), new Vector3(-2.1f, .12f, .5f), new Vector3(0, .12f, 3.1f) })
-        {
-            var candidate = Tractor.ToGlobal(local);
-            var query = new PhysicsShapeQueryParameters3D {
-                Shape = new CapsuleShape3D { Radius = .36f, Height = 1.8f },
-                Transform = new Transform3D(Basis.Identity, candidate + Vector3.Up * .92f),
-                CollisionMask = 1,
-                Exclude = new Godot.Collections.Array<Rid> { Player.GetRid() }
-            };
-            if (GetWorld3D().DirectSpaceState.IntersectShape(query).Count > 0) continue;
-            Player.GlobalPosition = candidate;
-            Player.Yaw = Tractor.Rotation.Y;
-            Player.Pitch = -.08f;
-            Player.SetDriving(false); Tractor.Occupied = false;
-            _snapCamera = true;
-            return true;
-        }
-        Message("Saída bloqueada. Leve o trator a um lugar mais aberto.");
-        return false;
-    }
-
-    public bool CanEnter()
-    {
-        if (Player.GlobalPosition.DistanceTo(Tractor.GlobalPosition) > 3.7f) return false;
-        var query = PhysicsRayQueryParameters3D.Create(Player.GlobalPosition + Vector3.Up * 1.4f, Tractor.GlobalPosition + Vector3.Up * 1.4f);
-        query.Exclude = new Godot.Collections.Array<Rid> { Player.GetRid() };
-        var hit = GetWorld3D().DirectSpaceState.IntersectRay(query);
-        return hit.Count > 0 && hit["collider"].AsGodotObject() == Tractor;
+        if (!DrivingTractor || Mathf.Abs(Tractor.Speed) > .1f) { Message("Pare o trator para trocar de ferramenta."); return false; }
+        if (tool == 2 && !Activities.State.HarrowOwned) { Message("Compre a grade na loja por R$ 220."); return false; }
+        Tractor.Equip(tool); Message($"{Tractor.ToolName} selecionada. {Prompt("R", "R1")} para baixar/levantar."); return true;
     }
 
     public override void _Process(double delta)
     {
         if (_paused) return;
-        UpdateCamera((float)delta);
-        _status.Text = Player.Driving ? "NA DIREÇÃO  /  CBT 2105" : "EXPLORANDO  /  A PÉ";
-        _speed.Text = Player.Driving ? $"{Mathf.Abs(Tractor.Speed) * 3.6f:00} km/h\n{(Tractor.Speed < -.1f ? "RÉ" : "FRENTE")}   •   FARÓIS {(Tractor.LightsOn ? "ACESOS" : "APAGADOS")}" : "MANHÃ NO CAMPO\nFazenda Vale das Flores";
-        _hint.Text = Player.Driving ? "W / S  acelerar e ré     A / D  direção     ESPAÇO  freio\nE  descer     V  câmera     F  faróis     RODA DO MOUSE  distância" :
-            CanEnter() ? "[ E ]  ENTRAR NO CBT 2105\nA câmera muda para terceira pessoa ao entrar" : "W A S D  caminhar     SHIFT  correr     ESPAÇO  pular\nV  primeira / terceira pessoa     E  entrar no trator";
+        if (Builder.Active) Builder.Tick((float)delta); else { LookWithGamepad((float)delta); UpdateCamera((float)delta); }
+        _status.Text = Player.Driving ? $"NA DIREÇÃO  /  {VehicleName}" : "EXPLORANDO  /  A PÉ";
+        _speed.Text = Player.Driving ? $"{Mathf.Abs(VehicleSpeed) * 3.6f:00} km/h\n{(VehicleSpeed < -.1f ? "RÉ" : "FRENTE")}   •   FARÓIS {((DrivingJeep ? Jeep.LightsOn : DrivingHilux ? Hilux.LightsOn : Tractor.LightsOn) ? "ACESOS" : "APAGADOS")}" : "MANHÃ NO CAMPO\nFazenda Vale das Flores";
+        _hint.Text = Activities.ContextHint();
+        if (!Player.Driving && CanEnter()) _hint.Text += (_hint.Text.Length > 0 ? "\n" : "") + $"{Prompt("E", "△")}  Entrar: {NearbyVehicleName()}";
+        else if (Player.Driving && Mathf.Abs(VehicleSpeed) <= .4f && _hint.Text.Length == 0)
+            _hint.Text = $"{Prompt("E", "△")}  Descer: {VehicleName}";
+        _progress.Text = $"R$ {Activities.State.Money}   /   NÍVEL {Activities.Level}   /   {Activities.State.Xp} XP\n{Activities.Objective}";
+        if (DrivingTractor) _speed.Text += $"\nDIESEL {Tractor.Fuel:0.0}/80 L\n{Tractor.ToolName} {(Tractor.ToolLowered ? "BAIXADA" : "LEVANTADA")}";
+        if ((DrivingJeep || (!Player.Driving && NearbyVehicle() == Jeep)) && Mathf.Abs(Jeep.Speed) <= .1f)
+            _hint.Text += $"\n{Prompt("H", "D-PAD DOWN")}  Capota: {(Jeep.RoofOn ? "retirar" : "colocar")}";
+        if (Builder.Active) _hint.Text = Builder.Hint;
+        _hint.GetParent<Control>().Visible = _hint.Text.Length > 0;
         _messageTime -= (float)delta;
         _toast.Visible = _messageTime > 0;
     }
@@ -131,37 +156,44 @@ public partial class Farm : Node3D
     private void UpdateCamera(float dt)
     {
         bool third = Player.Driving ? _vehicleThird : Player.ThirdPerson;
-        float yaw = Player.Driving ? Tractor.Rotation.Y + _orbitYaw : Player.Yaw;
+        float yaw = Player.Driving ? ActiveVehicle.Rotation.Y + _orbitYaw : Player.Yaw;
         float pitch = Player.Driving ? _orbitPitch : Player.Pitch;
         var basis = Basis.FromEuler(new(pitch, yaw, 0));
-        Vector3 target = Player.Driving ? Tractor.Seat : Player.GlobalPosition + Vector3.Up * 1.67f;
-        Tractor.Driver.Visible = Player.Driving && third;
+        Vector3 target = Player.Driving ? (DrivingJeep ? Jeep.Seat : DrivingHilux ? Hilux.Seat : Tractor.Seat) : Player.GlobalPosition + Vector3.Up * 1.67f;
+        Tractor.Driver.Visible = DrivingTractor && third;
+        Hilux.Driver.Visible = DrivingHilux && third;
+        Jeep.Driver.Visible = DrivingJeep && third;
         Vector3 position = target;
         if (third)
         {
             var desired = target + basis.Z * (Player.Driving ? _zoom : 4.2f);
             var query = PhysicsRayQueryParameters3D.Create(target, desired);
-            query.Exclude = new Godot.Collections.Array<Rid> { Player.GetRid(), Tractor.GetRid() };
+            query.Exclude = new Godot.Collections.Array<Rid> { Player.GetRid(), ActiveVehicle.GetRid() };
             var hit = GetWorld3D().DirectSpaceState.IntersectRay(query);
             position = hit.Count > 0 ? hit["position"].AsVector3() + hit["normal"].AsVector3() * .28f : desired;
-            position.Y = Mathf.Max(.25f, position.Y);
+            position.Y = Mathf.Max(Terrain.HeightAt(position.X, position.Z) + .25f, position.Y);
         }
         Camera.GlobalPosition = _snapCamera || !third ? position : Camera.GlobalPosition.Lerp(position, 1 - Mathf.Exp(-12 * dt));
         Camera.GlobalBasis = basis;
         _snapCamera = false;
     }
 
-    private void Message(string text) { _toast.Text = text; _messageTime = 3; }
+    public void Message(string text) { _toast.Text = text; _messageTime = 5; if (_shopOpen && _shopFeedback != null) _shopFeedback.Text = text; }
 
     public void SetPaused(bool pause)
     {
         _paused = pause; GetTree().Paused = pause; _pausePanel.Visible = pause;
+        RefreshMenuPresentation(pause);
+        _shopOpen = false; if (_shopPanel != null) _shopPanel.Visible = false;
+        if (pause) RefreshSlots();
+        else GetViewport().GuiGetFocusOwner()?.ReleaseFocus();
+        if (_hudGroup != null) _hudGroup.Visible = !pause;
         Input.MouseMode = pause ? Input.MouseModeEnum.Visible : Input.MouseModeEnum.Captured;
     }
 
     public override void _Notification(int what)
     {
-        if (what == NotificationApplicationFocusOut && IsNodeReady()) SetPaused(true);
+        if (what == NotificationApplicationFocusOut && IsNodeReady() && !_paused) SetPaused(true);
     }
 
     private static Label Text(Control parent, string text, int size, Color color)
@@ -174,40 +206,9 @@ public partial class Farm : Node3D
     private static PanelContainer Panel(Control parent, Vector2 position, Vector2 size)
     {
         var panel = new PanelContainer { Position = position, Size = size, MouseFilter = Control.MouseFilterEnum.Ignore };
-        var style = new StyleBoxFlat { BgColor = new Color(.09f, .14f, .1f, .88f), CornerRadiusTopLeft = 8, CornerRadiusTopRight = 8, CornerRadiusBottomLeft = 8, CornerRadiusBottomRight = 8,
-            ContentMarginLeft = 20, ContentMarginRight = 20, ContentMarginTop = 14, ContentMarginBottom = 14 };
-        panel.AddThemeStyleboxOverride("panel", style); parent.AddChild(panel); return panel;
+        panel.AddThemeStyleboxOverride("panel", RetroBox("24271ee8", "837448", 2, 18));
+        parent.AddChild(panel); return panel;
     }
 
-    private void CreateHud()
-    {
-        var layer = new CanvasLayer(); AddChild(layer);
-        var root = new Control { MouseFilter = Control.MouseFilterEnum.Ignore }; layer.AddChild(root); root.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        var title = Panel(root, new(28, 24), new(340, 104));
-        var column = new VBoxContainer(); title.AddChild(column);
-        Text(column, "VALE DAS FLORES", 28, new Color("f3e6bf"));
-        _status = Text(column, "EXPLORANDO  /  A PÉ", 13, new Color("b9c6a6"));
-        var info = Panel(root, Vector2.Zero, new(280, 95));
-        info.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.TopRight); info.OffsetLeft = -308; info.OffsetRight = -28; info.OffsetTop = 24; info.OffsetBottom = 119;
-        _speed = Text(info, "", 20, new Color("f3e6bf"));
-        var hint = Panel(root, Vector2.Zero, new(760, 84));
-        hint.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomLeft); hint.OffsetLeft = 28; hint.OffsetRight = 788; hint.OffsetTop = -112; hint.OffsetBottom = -28;
-        _hint = Text(hint, "", 17, new Color("f1e8ce"));
-        var esc = Text(root, "ESC  pausa", 16, new Color("fff4d7"));
-        esc.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.BottomRight); esc.OffsetLeft = -130; esc.OffsetRight = -20; esc.OffsetTop = -50; esc.OffsetBottom = -20;
-        var crosshair = Text(root, "+", 20, new Color(1, 1, 1, .7f));
-        crosshair.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.Center); crosshair.OffsetLeft = -6; crosshair.OffsetTop = -14; crosshair.OffsetRight = 10; crosshair.OffsetBottom = 14;
-        _toast = Text(root, "", 20, new Color("fff0b5"));
-        _toast.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.CenterTop); _toast.OffsetLeft = -330; _toast.OffsetTop = 150; _toast.OffsetRight = 430; _toast.OffsetBottom = 190;
-        _pausePanel = new ColorRect { Color = new Color(.04f, .07f, .05f, .9f), Visible = false };
-        root.AddChild(_pausePanel); _pausePanel.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        var center = new CenterContainer(); _pausePanel.AddChild(center); center.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        var menu = new VBoxContainer { CustomMinimumSize = new(400, 0) }; center.AddChild(menu);
-        menu.AddThemeConstantOverride("separation", 18);
-        Text(menu, "UMA PAUSA NO CAMPO", 30, new Color("f3e6bf"));
-        Text(menu, "Vale das Flores • protótipo", 18, new Color("bdcaa8"));
-        var resume = new Button { Text = "Continuar  [ESC]", CustomMinimumSize = new(400, 52) }; menu.AddChild(resume); resume.Pressed += () => SetPaused(false);
-        var quit = new Button { Text = "Sair do jogo", CustomMinimumSize = new(400, 52) }; menu.AddChild(quit); quit.Pressed += () => GetTree().Quit();
-        Text(menu, "Exploração e condução. Sem salvamento nesta versão.", 14, new Color("bdcaa8"));
-    }
+    private void CreateHud() => CreateRetroHud();
 }

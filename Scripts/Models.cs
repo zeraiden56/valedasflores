@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace ValeDasFlores;
 
-// Recria em Godot a construção por caixas e rodas do Distribuidora Simulator.
+// Shared low-poly pieces for the farm's photo-inspired models.
 public static class Models
 {
     private static readonly Dictionary<string, StandardMaterial3D> Materials = new();
@@ -39,6 +39,31 @@ public static class Models
         parent.AddChild(new CollisionShape3D { Position = position, Shape = new BoxShape3D { Size = size } });
     }
 
+    public static MeshInstance3D Rod(Node3D parent, Vector3 from, Vector3 to, float radius, string color, float? tip = null)
+    {
+        var rod = Cylinder(parent, (from + to) * .5f, radius, from.DistanceTo(to), color, tip);
+        rod.Quaternion = new Quaternion(Vector3.Up, (to - from).Normalized());
+        return rod;
+    }
+
+    public static Mesh GrassTuft(Material material)
+    {
+        var surface = new SurfaceTool(); surface.Begin(Mesh.PrimitiveType.Triangles);
+        // Six leaning blades share one instanced mesh, like the dry clumps in the photos.
+        for (int i = 0; i < 6; i++)
+        {
+            float a = i * Mathf.Tau / 6;
+            var direction = new Vector3(Mathf.Cos(a), 0, Mathf.Sin(a));
+            var across = new Vector3(-direction.Z, 0, direction.X) * .075f;
+            var foot = direction * .06f - Vector3.Up * .16f;
+            surface.AddVertex(foot - across);
+            surface.AddVertex(foot + across);
+            surface.AddVertex(direction * .2f + Vector3.Up * (.16f - i % 2 * .05f));
+        }
+        surface.GenerateNormals(); surface.SetMaterial(material);
+        var mesh = surface.Commit(); surface.Dispose(); return mesh;
+    }
+
     public static StaticBody3D Solid(Node3D parent, Vector3 position, Vector3 size, string color)
     {
         var body = new StaticBody3D { Position = position };
@@ -63,6 +88,18 @@ public static class Models
         Box(model, new(0, 1.12f, 0), new(.5f, .64f, .28f), "496a50");
         foreach (float side in new[] { -1f, 1f })
         {
+            if (!seated)
+            {
+                var leg = new Node3D { Name = side < 0 ? "LeftLeg" : "RightLeg", Position = new(side * .16f, .83f, 0) };
+                model.AddChild(leg);
+                Box(leg, new(0, -.4f, 0), new(.22f, .8f, .26f), "354554");
+                Box(leg, new(0, -.73f, -.08f), new(.24f, .18f, .4f), "473c32");
+                var shoulder = new Node3D { Name = side < 0 ? "LeftArm" : "RightArm", Position = new(side * .34f, 1.34f, 0) };
+                model.AddChild(shoulder);
+                Box(shoulder, new(0, -.3f, 0), new(.16f, .6f, .18f), "c38e63");
+                Box(shoulder, new(0, -.1f, 0), new(.18f, .23f, .2f), "496a50");
+                continue;
+            }
             Box(model, new(side * .16f, seated ? .72f : .43f, seated ? -.23f : 0),
                 seated ? new(.22f, .22f, .64f) : new(.22f, .8f, .26f), "354554");
             if (seated) Box(model, new(side * .16f, .43f, -.5f), new(.22f, .55f, .23f), "354554");
@@ -82,9 +119,16 @@ public static class Models
     {
         var tree = new StaticBody3D { Position = position };
         parent.AddChild(tree);
-        Cylinder(tree, new(0, size, 0), .24f, size * 2, "796044");
+        Rod(tree, Vector3.Zero, new(.18f, size * 2, 0), .24f, "796044", .12f);
         Collider(tree, new(0, size, 0), new(.5f, size * 2, .5f));
-        Cylinder(tree, new(0, size * 2.4f, 0), size, size * 1.6f, "426344", .15f);
-        Cylinder(tree, new(0, size * 3, 0), size * .75f, size * 1.2f, "58744a", 0);
+        for (int i = 0; i < 4; i++)
+        {
+            float angle = i * Mathf.Tau / 4 + position.X;
+            var tip = new Vector3(Mathf.Cos(angle) * size * .75f, size * (2.1f + i * .12f), Mathf.Sin(angle) * size * .75f);
+            Rod(tree, new(.12f, size * 1.4f, 0), tip, .09f, "796044", .025f);
+            tree.AddChild(new MeshInstance3D { Position = tip, Scale = new(1, .65f, .85f),
+                Mesh = new SphereMesh { Radius = size * .8f, Height = size * 1.6f, RadialSegments = 7, Rings = 3 },
+                MaterialOverride = Material(i % 2 == 0 ? "657044" : "858253") });
+        }
     }
 }

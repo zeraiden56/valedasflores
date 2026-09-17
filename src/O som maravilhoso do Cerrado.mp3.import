@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://1cddgkxm0k12"
+path="res://.godot/imported/O som maravilhoso do Cerrado.mp3-62cb7cf5abac50c7748445422945205b.mp3str"
+
+[deps]
+
+source_file="res://src/O som maravilhoso do Cerrado.mp3"
+dest_files=["res://.godot/imported/O som maravilhoso do Cerrado.mp3-62cb7cf5abac50c7748445422945205b.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4

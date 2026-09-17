@@ -1,0 +1,19 @@
+[remap]
+
+importer="mp3"
+type="AudioStreamMP3"
+uid="uid://dxewrfromfdgf"
+path="res://.godot/imported/TOYOTA HILUX (1999-2004) KZN165R 3L TURBO DIESEL - 3 TURBO BACK EXHAUST.mp3-1c03b4bb84911729ce3c4ed02327eb57.mp3str"
+
+[deps]
+
+source_file="res://src/TOYOTA HILUX (1999-2004) KZN165R 3L TURBO DIESEL - 3 TURBO BACK EXHAUST.mp3"
+dest_files=["res://.godot/imported/TOYOTA HILUX (1999-2004) KZN165R 3L TURBO DIESEL - 3 TURBO BACK EXHAUST.mp3-1c03b4bb84911729ce3c4ed02327eb57.mp3str"]
+
+[params]
+
+loop=false
+loop_offset=0
+bpm=0
+beat_count=0
+bar_beats=4
